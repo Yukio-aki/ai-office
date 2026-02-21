@@ -1,0 +1,44 @@
+# API keys and secrets (САМОЕ ВАЖНОЕ!)
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Virtual environment (чтобы не засорять репозиторий)
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# Python cache files (мусорные файлы)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE settings (твои личные настройки редактора)
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store  # для Mac
+
+# Project specific (если нужно)
+data/  # если там скачанные данные
+logs/
+*.db
+*.sqlite3
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.log
