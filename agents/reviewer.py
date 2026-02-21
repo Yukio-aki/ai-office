@@ -7,4 +7,5 @@ def create_reviewer(llm):
         backstory="You are a strict code reviewer.",
         llm=llm,
         verbose=True,
+        allow_delegation=False,
     )

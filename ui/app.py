@@ -16,6 +16,7 @@ task_input = st.text_area(
     "Поставь задачу агентам",
     placeholder="Например: сделай парсер сайта..."
 )
+#Comment
 
 if st.button("Запустить"):
     if task_input.strip():

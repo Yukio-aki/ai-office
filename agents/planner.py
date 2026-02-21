@@ -7,4 +7,5 @@ def create_planner(llm):
         backstory="You are a senior project planner.",
         llm=llm,
         verbose=True,
+        allow_delegation=False,
     )
