@@ -1,0 +1,416 @@
+import json
+import os
+from datetime import datetime
+from pathlib import Path
+from typing import List, Dict, Any
+import re
+import sys
+
+# Добавляем путь к корню проекта
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.append(str(ROOT))
+
+from session_logger import get_logger
+
+
+class ProjectManager:
+    """Агент-менеджер для сбора требований и ведения диалога"""
+
+    def __init__(self, session_id=None):
+        self.session_id = session_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.dialog_history = []
+        self.requirements = {
+            'initial_task': '',
+            'clarified_task': '',
+            'project_type': 'unknown',
+            'technologies': [],
+            'forbidden': [],
+            'features': [],
+            'colors': [],
+            'examples': [],
+            'references': [],
+            'animation_speed': 'medium',
+            'mood': 'dark',
+            'style': 'abstract'
+        }
+
+        # Инициализируем логгер
+        self.logger = get_logger()
+
+        # Категории для анализа ответов
+        self.categories = {
+            'type': ['сайт', 'страниц', 'html', 'парс', 'бот', 'скрипт', 'утилит', 'приложени'],
+            'tech': ['react', 'vue', 'angular', 'bootstrap', 'tailwind', 'python', 'js', 'javascript'],
+            'color': ['черн', 'бел', 'сер', 'темн', 'светл', 'фиолет', 'син', 'красн', 'зелен'],
+            'animation': ['медлен', 'средн', 'быстр', 'движ', 'анимац'],
+            'style': ['абстракт', 'геометрич', 'органическ', 'минимал', 'футурист', 'дарк', 'фэнтези'],
+            'effect': ['переход', 'негатив', 'черно-бел', 'grayscale', 'hover', 'клик'],
+            'forbidden': ['не используй', 'без', 'запрещ', 'не надо', 'кроме']
+        }
+
+        # Папка для сохранения диалогов
+        self.dialog_dir = Path(__file__).parent.parent / "dialog_history"
+        self.dialog_dir.mkdir(exist_ok=True)
+
+    def start_dialog(self, initial_task: str):
+        """Начинает диалог с пользователем"""
+        self.requirements['initial_task'] = initial_task
+        self._add_to_history("user", initial_task)
+
+        welcome_message = f"""🎨 **Привет! Я помогу воплотить твою идею в жизнь.**
+
+Я вижу, ты хочешь: **"{initial_task}"**
+
+**Что дальше:**
+1. Просто **описывай** что хочешь (коротко или подробно)
+2. Я **проанализирую** и задам уточняющие вопросы
+3. Когда будет достаточно инфы — **сформирую ТЗ**
+
+**С чего начнем?** Например, расскажи подробнее о:
+- 🎯 Тип проекта (сайт, анимация, эффект)
+- 🎨 Цветовая гамма
+- ⚡ Анимация (как должна двигаться)
+- 📎 Примеры (ссылки или описания)
+
+Я понимаю свободную речь, просто пиши что хочешь! 👇
+"""
+
+        self._add_to_history("system", welcome_message)
+        self._save_dialog()
+        return welcome_message
+
+    def _add_to_history(self, role: str, message: str):
+        """Добавляет сообщение в историю диалога и логгер"""
+        timestamp = datetime.now()
+
+        # Добавляем в историю
+        self.dialog_history.append({
+            'role': role,
+            'message': message,
+            'timestamp': timestamp.isoformat()
+        })
+
+        # Сохраняем в логгер
+        if role == 'user':
+            self.logger.log_chat("Пользователь (диалог)", message[:200])
+        else:
+            self.logger.log_chat("Менеджер", message[:200])
+
+        self.logger.log(f"[ДИАЛОГ] {role}: {message[:100]}...")
+
+    def process_response(self, user_response: str) -> Dict[str, Any]:
+        """Обрабатывает ответ пользователя и обновляет требования"""
+        self._add_to_history("user", user_response)
+
+        # Анализируем ответ
+        self._analyze_response_deep(user_response)
+
+        # Сохраняем диалог
+        self._save_dialog()
+
+        # Проверяем, достаточно ли информации
+        if self._is_ready_to_proceed():
+            final_spec = self._generate_final_spec()
+            self._add_to_history("system", f"✅ **Отлично! У меня достаточно информации.**\n\n```\n{final_spec}\n```")
+            self._save_dialog()
+            return {
+                'status': 'ready',
+                'spec': final_spec,
+                'dialog': self.dialog_history
+            }
+
+        # Анализируем чего не хватает и задаем вопрос
+        next_question = self._generate_smart_question()
+        if next_question:
+            self._add_to_history("system", next_question)
+            self._save_dialog()
+            return {
+                'status': 'continue',
+                'question': next_question,
+                'dialog': self.dialog_history
+            }
+        else:
+            final_spec = self._generate_final_spec()
+            return {
+                'status': 'ready',
+                'spec': final_spec,
+                'dialog': self.dialog_history
+            }
+
+    def _analyze_response_deep(self, response: str):
+        """Глубокий анализ ответа пользователя"""
+        response_lower = response.lower()
+
+        # 1. Определяем тип проекта
+        type_keywords = {
+            'сайт': 'website',
+            'страниц': 'website',
+            'html': 'website',
+            'парс': 'parser',
+            'бот': 'bot',
+            'скрипт': 'script',
+            'утилит': 'utility',
+            'игр': 'game',
+            'анимац': 'animation'
+        }
+
+        for keyword, proj_type in type_keywords.items():
+            if keyword in response_lower:
+                self.requirements['project_type'] = proj_type
+                break
+
+        # 2. Определяем технологии
+        tech_keywords = {
+            'react': 'React',
+            'vue': 'Vue',
+            'angular': 'Angular',
+            'bootstrap': 'Bootstrap',
+            'tailwind': 'Tailwind',
+            'python': 'Python',
+            'javascript': 'JavaScript',
+            'js': 'JavaScript',
+            'jquery': 'jQuery',
+            'canvas': 'Canvas',
+            'gsap': 'GSAP',
+            'three': 'Three.js',
+            'webgl': 'WebGL'
+        }
+
+        for keyword, tech in tech_keywords.items():
+            if keyword in response_lower and tech not in self.requirements['technologies']:
+                self.requirements['technologies'].append(tech)
+
+        # 3. Определяем цвета
+        color_patterns = {
+            'черн': 'черный',
+            'бел': 'белый',
+            'сер': 'серый',
+            'темн': 'темный',
+            'светл': 'светлый',
+            'фиолет': 'фиолетовый',
+            'син': 'синий',
+            'голуб': 'голубой',
+            'красн': 'красный',
+            'зелен': 'зеленый',
+            'желт': 'желтый'
+        }
+
+        for pattern, color in color_patterns.items():
+            if pattern in response_lower and color not in self.requirements['colors']:
+                self.requirements['colors'].append(color)
+
+        # 4. Определяем скорость анимации
+        if 'медлен' in response_lower:
+            self.requirements['animation_speed'] = 'slow'
+        elif 'средн' in response_lower:
+            self.requirements['animation_speed'] = 'medium'
+        elif 'быстр' in response_lower:
+            self.requirements['animation_speed'] = 'fast'
+
+        # 5. Определяем стиль
+        style_keywords = {
+            'абстракт': 'abstract',
+            'геометрич': 'geometric',
+            'органическ': 'organic',
+            'минимал': 'minimal',
+            'футурист': 'futuristic',
+            'дарк': 'dark',
+            'фэнтези': 'fantasy',
+            'киберпанк': 'cyberpunk'
+        }
+
+        for keyword, style in style_keywords.items():
+            if keyword in response_lower:
+                self.requirements['style'] = style
+
+        # 6. Определяем настроение
+        if 'темн' in response_lower or 'дарк' in response_lower:
+            self.requirements['mood'] = 'dark'
+        elif 'светл' in response_lower:
+            self.requirements['mood'] = 'light'
+
+        # 7. Определяем эффекты
+        effect_keywords = [
+            'переход', 'негатив', 'черно-бел', 'grayscale',
+            'наведен', 'клик', 'пар', 'частиц', 'свечен'
+        ]
+
+        for effect in effect_keywords:
+            if effect in response_lower:
+                effect_name = effect.replace('черно-бел', 'черно-белый')
+                if effect_name not in self.requirements['features']:
+                    self.requirements['features'].append(effect_name)
+
+        # 8. Определяем запреты
+        for word in self.categories['forbidden']:
+            if word in response_lower:
+                # Пытаемся понять что именно запрещено
+                words = response_lower.split()
+                for i, w in enumerate(words):
+                    if word in w and i + 1 < len(words):
+                        forbidden_item = words[i + 1]
+                        if forbidden_item not in self.requirements['forbidden']:
+                            self.requirements['forbidden'].append(forbidden_item)
+
+        # 9. Извлекаем ссылки
+        urls = re.findall(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+])+', response)
+        if urls:
+            self.requirements['examples'].extend(urls)
+
+        # 10. Анализируем длину ответа (для определения детализации)
+        word_count = len(response.split())
+        if word_count > 20:
+            self.requirements['detailed_response'] = True
+
+        # 11. Удаляем дубликаты
+        self.requirements['technologies'] = list(set(self.requirements['technologies']))
+        self.requirements['colors'] = list(set(self.requirements['colors']))
+        self.requirements['features'] = list(set(self.requirements['features']))
+        self.requirements['forbidden'] = list(set(self.requirements['forbidden']))
+
+    def _generate_smart_question(self) -> str:
+        """Генерирует умный вопрос на основе того, чего не хватает"""
+
+        # Словарь с вопросами по категориям
+        question_bank = {
+            'type': "🎯 **Уточни тип проекта:**\n   - Сайт/страница\n   - Анимация/эффект\n   - Другое",
+            'colors': "🎨 **Какие цвета предпочитаешь?**\n   - Темные/светлые\n   - Конкретные оттенки\n   - Градиенты",
+            'animation': "⚡ **Как должна двигаться анимация?**\n   - Плавно/медленно\n   - Средне\n   - Быстро/динамично",
+            'style': "✨ **Какой стиль ближе?**\n   - Абстрактный\n   - Геометрический\n   - Органический/природный",
+            'effects': "🌟 **Нужны спецэффекты?**\n   - Свечение\n   - Частицы\n   - Переходы\n   - Черно-белый режим",
+            'examples': "📎 **Есть примеры/референсы?**\n   Скинь ссылки или опиши словами"
+        }
+
+        # Проверяем чего не хватает
+        missing = []
+
+        if self.requirements['project_type'] == 'unknown':
+            missing.append('type')
+        elif len(self.requirements['colors']) == 0:
+            missing.append('colors')
+        elif 'animation_speed' not in self.requirements:
+            missing.append('animation')
+        elif self.requirements['style'] == 'abstract' and len(self.requirements['features']) < 2:
+            missing.append('effects')
+        elif len(self.requirements['examples']) == 0 and len(self.dialog_history) < 4:
+            missing.append('examples')
+
+        if missing:
+            # Берем первый недостающий элемент
+            return question_bank.get(missing[0], "Расскажи подробнее, что ты хочешь?")
+
+        return None
+
+    def _is_ready_to_proceed(self) -> bool:
+        """Проверяет, достаточно ли информации"""
+
+        # Минимальные требования
+        required = [
+            self.requirements['project_type'] != 'unknown',
+            len(self.requirements['colors']) > 0,
+            self.requirements['initial_task'] != ''
+        ]
+
+        # Для сайтов нужно больше деталей
+        if self.requirements['project_type'] == 'website':
+            required.append(len(self.requirements['features']) >= 2)
+
+        # Если диалог уже длинный - пора закругляться
+        if len(self.dialog_history) > 6:
+            return True
+
+        return all(required)
+
+    def _generate_final_spec(self) -> str:
+        """Генерирует финальное техническое задание"""
+
+        spec = f"""# 📋 ТЕХНИЧЕСКОЕ ЗАДАНИЕ
+
+## 🎯 Исходный запрос:
+{self.requirements['initial_task']}
+
+## 📌 Уточненное описание:
+
+### Тип проекта:
+**{self.requirements['project_type']}** - {'Веб-сайт с анимацией' if self.requirements['project_type'] == 'website' else 'Интерактивный проект'}
+
+### 🎨 Цветовая гамма:
+{', '.join(self.requirements['colors']) if self.requirements['colors'] else 'Темные тона (по умолчанию)'}
+
+### ⚡ Анимация:
+Скорость: **{self.requirements.get('animation_speed', 'medium')}**
+Стиль: **{self.requirements.get('style', 'abstract')}**
+
+### ✨ Ключевые функции:
+"""
+        for feature in self.requirements['features']:
+            spec += f"- {feature}\n"
+
+        if self.requirements['technologies']:
+            spec += f"\n### 🛠 Технологии:\n"
+            for tech in self.requirements['technologies']:
+                spec += f"- {tech}\n"
+
+        if self.requirements['forbidden']:
+            spec += f"\n### 🚫 Запрещено использовать:\n"
+            for forbid in self.requirements['forbidden']:
+                spec += f"- {forbid}\n"
+
+        if self.requirements['examples']:
+            spec += f"\n### 📎 Референсы:\n"
+            for ex in self.requirements['examples']:
+                spec += f"- {ex}\n"
+
+        spec += f"""
+## 📊 Детали реализации:
+
+1. **Структура:** Один HTML файл
+2. **Анимация:** {self.requirements.get('animation_speed', 'medium')} скорость, {self.requirements.get('style', 'abstract')} стиль
+3. **Эффекты:** {', '.join(self.requirements['features']) if self.requirements['features'] else 'Базовые'}
+4. **Цвета:** {', '.join(self.requirements['colors']) if self.requirements['colors'] else 'Темная тема'}
+
+## 💡 Дополнительно:
+- Код должен работать сразу после открытия
+- Без внешних зависимостей (если не указано иное)
+- Комментарии в коде
+"""
+
+        return spec
+
+    def _save_dialog(self):
+        """Сохраняет историю диалога в файл"""
+        filename = self.dialog_dir / f"dialog_{self.session_id}.json"
+
+        # Подготавливаем данные для сохранения
+        data = {
+            'session_id': self.session_id,
+            'requirements': self.requirements,
+            'dialog': self.dialog_history,
+            'timestamp': datetime.now().isoformat(),
+            'message_count': len(self.dialog_history)
+        }
+
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False, default=str)
+
+    def load_previous_dialog(self, session_id: str):
+        """Загружает предыдущий диалог"""
+        filename = self.dialog_dir / f"dialog_{session_id}.json"
+        if filename.exists():
+            with open(filename, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                self.requirements = data['requirements']
+                self.dialog_history = data['dialog']
+                return True
+        return False
+
+    def get_summary(self) -> Dict[str, Any]:
+        """Возвращает краткое описание текущего состояния"""
+        return {
+            'session_id': self.session_id,
+            'messages': len(self.dialog_history),
+            'ready': self._is_ready_to_proceed(),
+            'type': self.requirements['project_type'],
+            'colors': len(self.requirements['colors']),
+            'features': len(self.requirements['features'])
+        }
