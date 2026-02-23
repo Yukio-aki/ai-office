@@ -9,6 +9,19 @@ import traceback
 import time
 import re
 
+# Добавляем пути
+import sys
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.append(str(ROOT))
+
+# Импорты наших модулей
+from agents.translator import create_translator
+from agents.planner import create_planner
+from agents.developer import create_developer
+from agents.reviewer import create_reviewer
+from core.complexity import ComplexityAnalyzer
+from core.requirements import ProjectRequirements
+
 load_dotenv()
 
 # Пути
@@ -219,345 +232,241 @@ def generate_project_name(user_task: str, requirements=None):
     return "Project"
 
 
-def run_crew(user_task: str, technical_spec: str = None, requirements=None):
-    """Запускает агентов с задачей и опциональным ТЗ"""
+def save_result(result_text, task_temp_dir, task_timestamp):
+    """Сохраняет результат в файлы"""
 
-    # Запускаем автоочистку в фоне
-    auto_cleanup()
+    # Извлекаем чистый HTML если нужно
+    if "```html" in result_text:
+        html_match = re.search(r'```html\n(.*?)```', result_text, re.DOTALL)
+        if html_match:
+            result_text = html_match.group(1)
+    elif "```" in result_text:
+        code_match = re.search(r'```\n(.*?)```', result_text, re.DOTALL)
+        if code_match:
+            result_text = code_match.group(1)
 
-    # Если есть ТЗ от менеджера, используем его
-    if technical_spec:
-        final_task = f"""
-        ОСНОВНАЯ ЗАДАЧА:
-        {user_task}
+    # Сохраняем HTML
+    html_file = task_temp_dir / "index.html"
+    with open(html_file, 'w', encoding='utf-8') as f:
+        f.write(result_text)
 
-        ТЕХНИЧЕСКОЕ ЗАДАНИЕ (строго соблюдать):
-        {technical_spec}
-        """
-        log_step("📋 Используется детальное ТЗ от менеджера")
-    else:
-        final_task = user_task
+    # Копируем в projects
+    project_dir = PROJECTS_PATH / f"PROJECT_{task_timestamp}"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(html_file, project_dir)
 
-    log_step(f"📥 Получена задача: {final_task[:100]}...")
+    return html_file, project_dir
 
-    # Создаём временную папку с уникальным именем
+
+def run_crew(user_task: str):
+    """Запускает агентов в зависимости от сложности"""
+
+    log_step("=" * 60)
+    log_step("🚀 АНАЛИЗ ЗАДАЧИ")
+    log_step("=" * 60)
+
+    # Создаём папку
     task_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     task_temp_dir = TEMP_PATH / f"task_{task_timestamp}"
     task_temp_dir.mkdir(parents=True, exist_ok=True)
-    log_step(f"📂 Рабочая папка: {task_temp_dir}")
 
-    # Создаем отчет о выполнении
+    # Отчет
     report_file = task_temp_dir / "execution_report.md"
     with open(report_file, 'w', encoding='utf-8') as f:
-        f.write(f"# Отчет о выполнении задачи\n\n")
-        f.write(f"**Задача:** {final_task}\n")
+        f.write(f"# Отчет о выполнении\n\n")
+        f.write(f"**Задача:** {user_task}\n")
         f.write(f"**Начало:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-        f.write("## Этапы выполнения\n\n")
 
     try:
-        # Создаём агентов
-        planner = create_agent(
-            "Planner",
-            "Create detailed technical plan. Must include specific steps and requirements.",
-            "You are Ася - senior technical planner. Always provide detailed plans."
-        )
+        # ===== ШАГ 0: ИСПОЛЬЗУЕМ LLM EXTRACTOR =====
+        from core.llm_extractor import LLMExtractor
+        extractor = LLMExtractor()
 
-        developer = create_agent(
-            "Developer",
-            "Write complete, working code. Include all necessary HTML, CSS, JavaScript.",
-            "You are Джун-и - full-stack developer. Always provide runnable code."
-        )
+        log_step("🤖 Извлечение требований через LLM...")
+        result = extractor.extract(user_task)
 
-        reviewer = create_agent(
-            "Reviewer",
-            "Check code thoroughly. Verify it works and meets requirements.",
-            "You are Кай - strict code reviewer. Never approve incomplete code."
-        )
+        # Проверяем тип результата
+        if isinstance(result, str):
+            log_step("⚠️ LLM вернул строку, пробую распарсить...")
+            try:
+                import json
+                # Пробуем найти JSON в строке
+                json_match = re.search(r'\{.*\}', result, re.DOTALL)
+                if json_match:
+                    requirements_dict = json.loads(json_match.group())
+                else:
+                    raise ValueError("No JSON found")
+            except:
+                log_step("❌ Не удалось распарсить JSON, создаю пустой словарь")
+                requirements_dict = {
+                    "project_type": None,
+                    "technologies": [],
+                    "forbidden": [],
+                    "colors": [],
+                    "style": None,
+                    "animation_speed": None,
+                    "features": [],
+                    "mood": None,
+                    "has_examples": False,
+                    "confidence": 0.1,
+                    "missing_info": ["LLM returned string instead of dict"]
+                }
+        else:
+            requirements_dict = result
 
-        # Новый агент - Переводчик
-        translator = create_agent(
-            "Translator",
-            """You are a prompt engineer. Your ONLY task is to convert user requests into EXACT technical specifications.
+        # Преобразуем в текст для агентов
+        requirements_text = ""
+        if isinstance(requirements_dict, dict):
+            for key, value in requirements_dict.items():
+                if value and key not in ['confidence', 'missing_info']:
+                    if isinstance(value, list):
+                        if value:
+                            requirements_text += f"- {key}: {', '.join(value)}\n"
+                    else:
+                        requirements_text += f"- {key}: {value}\n"
+        else:
+            requirements_text = str(requirements_dict)
+            log_step("⚠️ requirements_dict не является словарем")
 
-            Rules:
-            1. Remove all natural language, keep only technical requirements
-            2. Specify EXACT output format (HTML, CSS, JS)
-            3. Forbid frameworks and libraries
-            4. Require single file output
-            5. Demand specific features
-
-            Example input: "Сделай красивый сайт с анимацией"
-            Example output: "Create ONE HTML file with: CSS animations, dark theme, grayscale effect. NO frameworks, NO external libraries. All code in one file."
-            """,
-            "You are a strict technical translator. You convert vague requests into precise specifications."
-        )
-
-        # Задача переводчика
-        translate_task = Task(
-            description=f"""
-            Convert this user request into EXACT technical specifications:
-
-            {final_task}
-
-            Your response MUST be ONLY the technical spec. No explanations, no comments.
-            The spec must specify: file format, required features, forbidden elements.
-            """,
-            agent=translator,
-            expected_output="Technical specification with exact requirements",
-        )
-
-        with open(report_file, 'a', encoding='utf-8') as f:
-            f.write(f"### 🔤 Переводчик\n\n")
-            f.write(f"**Начало:** {datetime.now().strftime('%H:%M:%S')}\n\n")
-
-        # === ШАГ 1: ПЕРЕВОДЧИК ===
-        log_step("🔄 Запуск переводчика...")
-        translate_crew = Crew(
-            agents=[translator],
-            tasks=[translate_task],
-            verbose=False
-        )
-        translate_result = translate_crew.kickoff()
-
-        # Проверяем, что результат не пустой
-        if translate_result is None:
-            log_step("❌ Переводчик вернул пустой результат")
-            translate_result = final_task  # запасной вариант
-
-        log_step(f"📝 Техническое задание: {str(translate_result)[:100]}...")
+        log_step(f"📋 Извлеченные требования:\n{requirements_text}")
 
         with open(report_file, 'a', encoding='utf-8') as f:
-            f.write(f"**Результат:**\n```\n{translate_result}\n```\n\n")
-            f.write(f"**Завершение:** {datetime.now().strftime('%H:%M:%S')}\n\n")
-            f.write("---\n\n")
-            f.write(f"### 📋 Планировщик (Ася)\n\n")
-            f.write(f"**Начало:** {datetime.now().strftime('%H:%M:%S')}\n\n")
+            f.write(f"### 🔤 Извлечение требований (LLM)\n\n")
+            f.write(f"```\n{requirements_text}\n```\n\n")
 
-        # === ШАГ 2: ПЛАНИРОВЩИК ===
-        log_step("📋 Запуск планировщика...")
-        plan_task = Task(
-            description=f"""
-            Create a DETAILED TECHNICAL PLAN based on this specification:
+        # Анализируем сложность
+        complexity = ComplexityAnalyzer.analyze(requirements_dict)
+        log_step(f"📊 Сложность: {complexity.name} (уровень {complexity.level})")
+        log_step(f"📋 Нужны агенты: {', '.join(complexity.required_agents)}")
 
-            {translate_result}
+        current_input = requirements_text  # Теперь используем структурированные требования
 
-            Your plan MUST include:
-            1. EXACT HTML structure
-            2. Specific CSS animations with @keyframes
-            3. JavaScript functionality
-            4. Color scheme (dark theme)
+        # 1. ПЕРЕВОДЧИК (если нужен)
+        if "translator" in complexity.required_agents:
+            log_step("🔄 Запуск переводчика...")
+            translator = create_translator()
 
-            The plan should be IMPLEMENTATION-READY.
-            """,
-            agent=planner,
-            expected_output="Detailed technical plan with specific code structure",
-        )
+            task = Task(
+                description=f"Convert these requirements into clear technical specs:\n{current_input}",
+                agent=translator,
+                expected_output="Technical specifications",
+            )
 
-        planner_crew = Crew(
-            agents=[planner],
-            tasks=[plan_task],
-            verbose=False
-        )
-        planner_result = planner_crew.kickoff()
+            crew = Crew(agents=[translator], tasks=[task], verbose=False)
+            current_input = crew.kickoff()
+            current_input = current_input.raw if hasattr(current_input, 'raw') else str(current_input)
 
-        with open(report_file, 'a', encoding='utf-8') as f:
-            f.write(f"**Результат:**\n```\n{planner_result}\n```\n\n")
-            f.write(f"**Завершение:** {datetime.now().strftime('%H:%M:%S')}\n\n")
-            f.write("---\n\n")
-            f.write(f"### 💻 Разработчик (Джун-и)\n\n")
-            f.write(f"**Начало:** {datetime.now().strftime('%H:%M:%S')}\n\n")
+            with open(report_file, 'a', encoding='utf-8') as f:
+                f.write(f"### 🔤 Переводчик\n\n{current_input}\n\n")
 
-        # === ШАГ 3: РАЗРАБОТЧИК ===
+        # 2. ПЛАНИРОВЩИК (если нужен)
+        if "planner" in complexity.required_agents:
+            log_step("📋 Запуск планировщика...")
+            planner = create_planner()
+
+            task = Task(
+                description=f"Create detailed technical plan from:\n{current_input}",
+                agent=planner,
+                expected_output="Step-by-step technical plan",
+            )
+
+            crew = Crew(agents=[planner], tasks=[task], verbose=False)
+            current_input = crew.kickoff()
+            current_input = current_input.raw if hasattr(current_input, 'raw') else str(current_input)
+
+            with open(report_file, 'a', encoding='utf-8') as f:
+                f.write(f"### 📋 Планировщик\n\n{current_input}\n\n")
+
+        # 3. РАЗРАБОТЧИК (всегда нужен)
         log_step("💻 Запуск разработчика...")
-        dev_task = Task(
-            description=f"""
-            WRITE COMPLETE HTML CODE based on this plan.
+        developer = create_developer()
 
-            Plan:
-            {planner_result}
+        # Вместо жесткой строки:
+        task = Task(
+            description=f"""Write HTML code based on these requirements and plan:
 
-            CRITICAL REQUIREMENTS:
-            - Output MUST be ONLY the HTML code
-            - Start with <!DOCTYPE html>
-            - Include <style> for CSS animations
-            - Include <script> for any JavaScript
-            - DARK THEME (dark backgrounds)
-            - ABSTRACT ANIMATION (moving pattern)
-            - NO explanations, NO comments about the code
-            - JUST THE CODE, nothing else
+        REQUIREMENTS:
+        {requirements_text}
 
-            The code must work when saved as .html and opened in browser.
-            """,
+        PLAN:
+        {current_input if 'planner' in complexity.required_agents else 'Use best practices'}
+
+        CRITICAL RULES:
+        - Start with <!DOCTYPE html>
+        - End with </html>
+        - NO explanations before or after code
+        - JUST THE HTML CODE
+
+        OUTPUT ONLY THE CODE:""",
             agent=developer,
-            expected_output="Complete HTML code with CSS and JavaScript",
-            timeout=180,
+            expected_output="<!DOCTYPE html>...",
         )
 
-        dev_crew = Crew(
+        crew = Crew(
             agents=[developer],
-            tasks=[dev_task],
-            verbose=False
+            tasks=[task],
+            verbose=False,
+            cache=False  # <-- ОТКЛЮЧАЕМ КЭШ
         )
-        developer_result = dev_crew.kickoff()
+        result = crew.kickoff()
+        result_text = result.raw if hasattr(result, 'raw') else str(result)
 
-        # Проверяем, что разработчик выдал код, а не текст
-        dev_result_str = str(developer_result)
-        if "<!DOCTYPE" not in dev_result_str and "<html" not in dev_result_str:
-            log_step("⚠️ Разработчик не выдал HTML, пробую еще раз...")
+        with open(report_file, 'a', encoding='utf-8') as f:
+            f.write(f"### 💻 Разработчик\n\n```html\n{result_text}\n```\n\n")
 
-            dev_task_retry = Task(
-                description=f"""
-                YOU MUST OUTPUT ONLY HTML CODE. NO TEXT. NO EXPLANATIONS.
-                START YOUR RESPONSE WITH: <!DOCTYPE html>
-                Create a dark-themed page with moving abstract pattern.
-                YOUR ENTIRE RESPONSE MUST BE THE HTML CODE.
-                """,
-                agent=developer,
-                expected_output="<!DOCTYPE html> ... </html>",
-                timeout=120,
+        # 4. РЕВЬЮЕР (если нужен)
+        if "reviewer" in complexity.required_agents:
+            log_step("🔍 Запуск ревьюера...")
+            reviewer = create_reviewer()
+
+            task = Task(
+                description=f"""Review this HTML code against requirements:
+
+REQUIREMENTS:
+{requirements_text}
+
+CODE:
+{result_text}
+
+Check:
+1. Does it meet the requirements?
+2. Is the code valid?
+3. Are there any naive implementations?
+
+If approved, say "APPROVE"
+If rejected, say "REJECT: reason" and suggest improvements""",
+                agent=reviewer,
+                expected_output="APPROVE or REJECT with reason",
             )
 
-            dev_crew_retry = Crew(
-                agents=[developer],
-                tasks=[dev_task_retry],
-                verbose=False
-            )
-            developer_result = dev_crew_retry.kickoff()
+            crew = Crew(agents=[reviewer], tasks=[task], verbose=False)
+            review = crew.kickoff()
+            review_text = review.raw if hasattr(review, 'raw') else str(review)
+
+            with open(report_file, 'a', encoding='utf-8') as f:
+                f.write(f"### 🔍 Ревьюер\n\n{review_text}\n\n")
+
+            if "REJECT" in review_text:
+                log_step("❌ Код отклонен ревьюером")
+                # Здесь можно добавить повторную попытку
+
+        # Сохраняем результат
+        html_file, project_dir = save_result(result_text, task_temp_dir, task_timestamp)
 
         with open(report_file, 'a', encoding='utf-8') as f:
-            f.write(f"**Результат:**\n```html\n{developer_result}\n```\n\n")
-            f.write(f"**Завершение:** {datetime.now().strftime('%H:%M:%S')}\n\n")
-            f.write("---\n\n")
-            f.write(f"### 🔍 Ревьюер (Кай)\n\n")
-            f.write(f"**Начало:** {datetime.now().strftime('%H:%M:%S')}\n\n")
+            f.write(f"## ✅ Готово\n\n")
+            f.write(f"**HTML:** {html_file}\n")
+            f.write(f"**Проект:** {project_dir}\n")
 
-        # === ШАГ 4: РЕВЬЮЕР ===
-        log_step("🔍 Запуск ревьюера...")
-        review_task = Task(
-            description=f"""
-            REVIEW this HTML code:
+        log_step(f"✅ HTML: {html_file}")
+        log_step(f"✅ Проект: {project_dir}")
 
-            {developer_result}
-
-            CHECK:
-            1. Does it start with <!DOCTYPE>?
-            2. Does it have dark background?
-            3. Does it have CSS animation (@keyframes)?
-            4. Does it have grayscale effect?
-
-            If ANY requirement is missing, FIX THE CODE.
-            OUTPUT THE FINAL, WORKING HTML CODE ONLY.
-            NO EXPLANATIONS. JUST THE CODE.
-            """,
-            agent=reviewer,
-            expected_output="Fixed and working HTML code",
-            timeout=120,
-        )
-
-        review_crew = Crew(
-            agents=[reviewer],
-            tasks=[review_task],
-            verbose=False
-        )
-        reviewer_result = review_crew.kickoff()
-
-        with open(report_file, 'a', encoding='utf-8') as f:
-            f.write(f"**Результат:**\n```html\n{reviewer_result}\n```\n\n")
-            f.write(f"**Завершение:** {datetime.now().strftime('%H:%M:%S')}\n\n")
-
-        # Сохраняем результаты всех агентов
-        save_agent_outputs(planner_result, developer_result, reviewer_result, final_task, task_temp_dir)
-
-        # Берем финальный результат (от ревьюера)
-        final_result = reviewer_result
-
-        # Проверяем результат
-        result_text = str(final_result)
-        issues = validate_result(result_text, final_task)
-
-        with open(report_file, 'a', encoding='utf-8') as f:
-            f.write("## ✅ Итоговая проверка\n\n")
-            if issues:
-                f.write("### ❌ Найденные проблемы:\n\n")
-                for issue in issues:
-                    f.write(f"- {issue}\n")
-                f.write("\n⚠️ Требуется доработка!\n")
-                log_step("⚠️ Обнаружены проблемы в результате:")
-                for issue in issues:
-                    log_step(f"  {issue}")
-            else:
-                f.write("✅ Все проверки пройдены! Код готов.\n")
-                log_step("✅ Все проверки пройдены!")
-
-        # Сохраняем финальный результат в разных форматах
-        html_file = task_temp_dir / "index.html"
-        with open(html_file, 'w', encoding='utf-8') as f:
-            # Извлекаем HTML если он есть в markdown
-            html_content = result_text
-            if "```html" in result_text:
-                html_content = re.findall(r'```html\n(.*?)```', result_text, re.DOTALL)
-                if html_content:
-                    html_content = html_content[0]
-            elif "```" in result_text:
-                code_blocks = re.findall(r'```\n(.*?)```', result_text, re.DOTALL)
-                if code_blocks:
-                    html_content = code_blocks[0]
-
-            f.write(html_content)
-
-        log_step(f"✅ HTML файл сохранен: {html_file}")
-        log_step(f"✅ Отчет сохранен: {report_file}")
-
-        # Если есть HTML, создаем превью
-        if html_file.exists():
-            preview_file = task_temp_dir / "preview.html"
-            with open(preview_file, 'w', encoding='utf-8') as f:
-                f.write("""<!DOCTYPE html>
-<html>
-<head>
-    <title>Preview</title>
-    <style>
-        body { margin: 0; padding: 20px; background: #1a1a1a; color: #fff; }
-        iframe { width: 100%; height: 80vh; border: 1px solid #333; border-radius: 8px; }
-    </style>
-</head>
-<body>
-    <h2>Preview generated code:</h2>
-    <iframe srcdoc='""")
-
-                # Экранируем содержимое для iframe
-                with open(html_file, 'r', encoding='utf-8') as src:
-                    content = src.read().replace("'", "\\'").replace("\n", " ")
-                    f.write(content)
-
-                f.write("'></iframe>\n</body>\n</html>")
-
-            log_step(f"👁️ Превью доступно: {preview_file}")
-
-        # Генерируем имя проекта
-        project_base_name = generate_project_name(user_task, requirements)
-        project_name = f"{project_base_name}_{task_timestamp}"
-
-        # Копируем в общую папку projects
-        project_dir = PROJECTS_PATH / project_name
-        project_dir.mkdir(parents=True, exist_ok=True)
-
-        for file in task_temp_dir.glob("*"):
-            shutil.copy2(file, project_dir)
-
-        log_step(f"📁 Проект сохранен: {project_dir}")
-
-        return final_result
+        return result_text
 
     except Exception as e:
-        log_step(f"❌ КРИТИЧЕСКАЯ ОШИБКА: {str(e)}")
-        log_step(f"📝 Детали: {traceback.format_exc()}")
-
-        # Сохраняем ошибку в отчет
+        log_step(f"❌ Ошибка: {str(e)}")
         with open(report_file, 'a', encoding='utf-8') as f:
-            f.write(f"\n## ❌ ОШИБКА\n\n")
-            f.write(f"```\n{traceback.format_exc()}\n```\n")
-
+            f.write(f"\n## ❌ Ошибка\n\n```\n{traceback.format_exc()}\n```\n")
         raise e
 
 

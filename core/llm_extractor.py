@@ -1,4 +1,5 @@
 import os
+import re
 from crewai import Agent, Task, Crew
 from datetime import datetime
 import json
@@ -28,34 +29,37 @@ class LLMExtractor:
 
         extract_task = Task(
             description=f"""
-            Extract structured requirements from this user message:
+            EXTRACT STRUCTURED REQUIREMENTS. RETURN ONLY JSON. NO OTHER TEXT.
 
-            "{user_message}"
+            User message: "{user_message}"
             {context}
 
-            Return ONLY a JSON object with these fields (use null if not mentioned):
+            You MUST return a valid JSON object with exactly these fields:
             {{
                 "project_type": null or "website"|"parser"|"bot"|"script"|"animation",
-                "technologies": [],  // list of mentioned technologies
-                "forbidden": [],      // list of things user doesn't want
-                "colors": [],         // list of colors mentioned
+                "technologies": [],
+                "forbidden": [],
+                "colors": [],
                 "style": null or "abstract"|"geometric"|"organic"|"minimal"|"dark",
                 "animation_speed": null or "slow"|"medium"|"fast",
-                "features": [],       // list of specific features requested
+                "features": [],
                 "mood": null or "dark"|"light"|"mysterious",
-                "has_examples": false,  // whether user provided examples
-                "confidence": 0.0,     // 0-1 how clear is the requirement
-                "missing_info": []      // what's clearly missing
+                "has_examples": false,
+                "confidence": 0.0,
+                "missing_info": []
             }}
 
-            IMPORTANT: 
-            - Extract ONLY what the user explicitly said
-            - Do NOT add interpretations
-            - If something is unclear, note it in missing_info
-            - Return ONLY the JSON, no other text
+            RULES (VIOLATION = TASK FAILED):
+            1. Return ONLY the JSON object
+            2. No explanations before or after
+            3. No "Here is your JSON"
+            4. No markdown formatting
+            5. Just raw JSON starting with {{ and ending with }}
+
+            YOUR RESPONSE MUST BE ONLY THE JSON:
             """,
             agent=self.extractor_agent,
-            expected_output="JSON object with extracted requirements",
+            expected_output="JSON object",
         )
 
         crew = Crew(
@@ -66,17 +70,26 @@ class LLMExtractor:
 
         result = crew.kickoff()
 
+        # Получаем строковый результат
+        result_str = ""
+        if hasattr(result, 'raw'):
+            result_str = result.raw
+        else:
+            result_str = str(result)
+
+        # Пытаемся извлечь JSON из строки
         try:
-            # Пробуем распарсить JSON из ответа
-            if hasattr(result, 'raw'):
-                # Ищем JSON в ответе
-                import re
-                json_match = re.search(r'\{.*\}', result.raw, re.DOTALL)
-                if json_match:
-                    return json.loads(json_match.group())
-            return json.loads(str(result))
-        except:
-            # Если не получилось, возвращаем пустой словарь
+            # Ищем JSON в ответе
+            json_match = re.search(r'\{.*\}', result_str, re.DOTALL)
+            if json_match:
+                return json.loads(json_match.group())
+            else:
+                # Если нет JSON, пробуем распарсить всю строку
+                return json.loads(result_str)
+        except Exception as e:
+            print(f"Failed to parse JSON: {e}")
+            print(f"Raw response: {result_str[:200]}")
+            # Возвращаем пустой словарь
             return {
                 "project_type": None,
                 "technologies": [],

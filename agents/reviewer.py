@@ -1,7 +1,7 @@
 from crewai import Agent
 
 
-def create_reviewer(llm):
+def create_reviewer(llm=None):
     return Agent(
         role="Strict Code Auditor",
         goal="""Find EVERY issue in the code. Your reviews are so thorough that 

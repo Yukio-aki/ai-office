@@ -1,7 +1,7 @@
 from crewai import Agent
 
 
-def create_planner(llm):
+def create_planner(llm=None):
     return Agent(
         role="Architectural Planner",
         goal="""Create detailed, actionable technical plans. Your plans must be 

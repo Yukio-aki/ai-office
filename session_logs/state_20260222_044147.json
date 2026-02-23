@@ -1,0 +1,12 @@
+{
+  "session_start": "2026-02-22T04:41:47.340329",
+  "session_name": "20260222_044147",
+  "states": [
+    {
+      "timestamp": "2026-02-22T04:41:47.342329",
+      "key": "ui_start",
+      "value": "initialized",
+      "type": "str"
+    }
+  ]
+}
