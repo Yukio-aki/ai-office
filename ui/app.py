@@ -140,13 +140,31 @@ def run_agents_with_logs(task, log_queue, status_dict, project_files_list, stop_
         log_queue.put(("status", status_dict.copy()))
         log_queue.put(("progress", {'planner': 30, 'total': 10}))
 
-        # Используем ТЗ если есть
-        if st.session_state.final_spec:
-            result = run_crew(task, st.session_state.final_spec)
+        # ИСПРАВЛЕНИЕ 1: Безопасная проверка final_spec
+        try:
+            has_spec = st.session_state.get('final_spec', None) is not None
+        except:
+            has_spec = False
+
+        # ИСПРАВЛЕНИЕ 2: result объявляем до использования
+        result = None
+
+        if has_spec:
+            try:
+                spec = st.session_state.final_spec
+                result = run_crew(task, spec)
+            except Exception as e:
+                log_queue.put(("log", f"⚠️ Ошибка с ТЗ: {str(e)[:50]}, запускаю без ТЗ"))
+                result = run_crew(task)
         else:
             result = run_crew(task)
 
         if stop_flag_ref[0]: return
+
+        # Проверяем, что result не пустой
+        if result is None:
+            log_queue.put(("log", "❌ run_crew вернул None"))
+            return
 
         # Разработчик
         status_dict['planner'] = 'done'
@@ -190,6 +208,8 @@ def run_agents_with_logs(task, log_queue, status_dict, project_files_list, stop_
 
     except Exception as e:
         log_queue.put(("log", f"❌ Ошибка: {str(e)[:100]}"))
+        import traceback
+        log_queue.put(("log", f"📋 Детали: {traceback.format_exc()[:200]}"))
 
 
 def update_progress_bars():

@@ -35,6 +35,31 @@ def log_step(message):
     print(f"[{timestamp}] {message}")
 
 
+def auto_cleanup(max_age_hours: int = 24):
+    """Автоматически удаляет старые временные файлы"""
+    try:
+        now = time.time()
+        # Чистим temp папки старше max_age_hours
+        if TEMP_PATH.exists():
+            for item in TEMP_PATH.glob("task_*"):
+                if item.is_dir():
+                    age = now - item.stat().st_mtime
+                    if age > max_age_hours * 3600:
+                        shutil.rmtree(item, ignore_errors=True)
+                        log_step(f"🧹 Удалена старая папка: {item.name}")
+
+        # Чистим старые проекты (можно оставить, но с пометкой)
+        if PROJECTS_PATH.exists():
+            for item in PROJECTS_PATH.glob("project_*"):
+                if item.is_dir():
+                    age = now - item.stat().st_mtime
+                    if age > max_age_hours * 24 * 7:  # Неделя
+                        shutil.rmtree(item, ignore_errors=True)
+                        log_step(f"🗑️ Удален старый проект: {item.name}")
+    except Exception as e:
+        log_step(f"⚠️ Ошибка при очистке: {e}")
+
+
 def create_backup(async_mode=True):
     """Создаёт бекап асинхронно"""
     if async_mode:
@@ -169,26 +194,51 @@ def save_agent_outputs(planner_output, developer_output, reviewer_output, task, 
         log_step(f"🔍 Ревью сохранено: {review_file}")
 
 
-def run_crew(user_task: str):
-    """Запускает агентов с задачей и принудительной проверкой результатов"""
+def generate_project_name(user_task: str, requirements=None):
+    """Генерирует имя проекта на основе задачи и требований"""
+    try:
+        if requirements and hasattr(requirements, 'generate_project_name'):
+            return requirements.generate_project_name()
 
-    def run_crew(user_task: str, technical_spec: str = None):
-        """Запускает агентов с задачей и опциональным ТЗ"""
+        # Пробуем извлечь из задачи
+        words = user_task.split()[:3]
+        # Очищаем от спецсимволов
+        clean_words = []
+        for w in words:
+            # Убираем эмодзи и спецсимволы
+            clean = ''.join(c for c in w if c.isalnum())
+            if clean:
+                clean_words.append(clean)
 
-        # Если есть ТЗ от менеджера, используем его
-        if technical_spec:
-            final_task = f"""
-            ОСНОВНАЯ ЗАДАЧА:
-            {user_task}
+        if clean_words:
+            base_name = '_'.join(clean_words)
+            return base_name
+    except:
+        pass
 
-            ТЕХНИЧЕСКОЕ ЗАДАНИЕ (строго соблюдать):
-            {technical_spec}
-            """
-            log_step("📋 Используется детальное ТЗ от менеджера")
-        else:
-            final_task = user_task
+    return "Project"
 
-        log_step(f"📥 Получена задача: {final_task[:100]}...")
+
+def run_crew(user_task: str, technical_spec: str = None, requirements=None):
+    """Запускает агентов с задачей и опциональным ТЗ"""
+
+    # Запускаем автоочистку в фоне
+    auto_cleanup()
+
+    # Если есть ТЗ от менеджера, используем его
+    if technical_spec:
+        final_task = f"""
+        ОСНОВНАЯ ЗАДАЧА:
+        {user_task}
+
+        ТЕХНИЧЕСКОЕ ЗАДАНИЕ (строго соблюдать):
+        {technical_spec}
+        """
+        log_step("📋 Используется детальное ТЗ от менеджера")
+    else:
+        final_task = user_task
+
+    log_step(f"📥 Получена задача: {final_task[:100]}...")
 
     # Создаём временную папку с уникальным именем
     task_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -200,7 +250,7 @@ def run_crew(user_task: str):
     report_file = task_temp_dir / "execution_report.md"
     with open(report_file, 'w', encoding='utf-8') as f:
         f.write(f"# Отчет о выполнении задачи\n\n")
-        f.write(f"**Задача:** {user_task}\n")
+        f.write(f"**Задача:** {final_task}\n")
         f.write(f"**Начало:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
         f.write("## Этапы выполнения\n\n")
 
@@ -247,7 +297,7 @@ def run_crew(user_task: str):
             description=f"""
             Convert this user request into EXACT technical specifications:
 
-            {user_task}
+            {final_task}
 
             Your response MUST be ONLY the technical spec. No explanations, no comments.
             The spec must specify: file format, required features, forbidden elements.
@@ -268,6 +318,12 @@ def run_crew(user_task: str):
             verbose=False
         )
         translate_result = translate_crew.kickoff()
+
+        # Проверяем, что результат не пустой
+        if translate_result is None:
+            log_step("❌ Переводчик вернул пустой результат")
+            translate_result = final_task  # запасной вариант
+
         log_step(f"📝 Техническое задание: {str(translate_result)[:100]}...")
 
         with open(report_file, 'a', encoding='utf-8') as f:
@@ -277,7 +333,7 @@ def run_crew(user_task: str):
             f.write(f"### 📋 Планировщик (Ася)\n\n")
             f.write(f"**Начало:** {datetime.now().strftime('%H:%M:%S')}\n\n")
 
-        # === ШАГ 2: ПЛАНИРОВЩИК (с техзаданием от переводчика) ===
+        # === ШАГ 2: ПЛАНИРОВЩИК ===
         log_step("📋 Запуск планировщика...")
         plan_task = Task(
             description=f"""
@@ -347,26 +403,14 @@ def run_crew(user_task: str):
         # Проверяем, что разработчик выдал код, а не текст
         dev_result_str = str(developer_result)
         if "<!DOCTYPE" not in dev_result_str and "<html" not in dev_result_str:
-            log_step("⚠️ Разработчик не выдал HTML, пробую еще раз с жестким промптом...")
+            log_step("⚠️ Разработчик не выдал HTML, пробую еще раз...")
 
-            # Повторный запрос с еще более жесткими требованиями
             dev_task_retry = Task(
                 description=f"""
                 YOU MUST OUTPUT ONLY HTML CODE. NO TEXT. NO EXPLANATIONS.
-
                 START YOUR RESPONSE WITH: <!DOCTYPE html>
-
                 Create a dark-themed page with moving abstract pattern.
-
-                REQUIRED ELEMENTS:
-                - Dark background (black or dark gray)
-                - Animated pattern using CSS @keyframes
-                - JavaScript for grayscale effect
-
                 YOUR ENTIRE RESPONSE MUST BE THE HTML CODE.
-                DO NOT EXPLAIN WHAT YOU DID.
-                DO NOT DESCRIBE THE CODE.
-                JUST OUTPUT THE CODE.
                 """,
                 agent=developer,
                 expected_output="<!DOCTYPE html> ... </html>",
@@ -402,7 +446,6 @@ def run_crew(user_task: str):
             4. Does it have grayscale effect?
 
             If ANY requirement is missing, FIX THE CODE.
-
             OUTPUT THE FINAL, WORKING HTML CODE ONLY.
             NO EXPLANATIONS. JUST THE CODE.
             """,
@@ -423,14 +466,14 @@ def run_crew(user_task: str):
             f.write(f"**Завершение:** {datetime.now().strftime('%H:%M:%S')}\n\n")
 
         # Сохраняем результаты всех агентов
-        save_agent_outputs(planner_result, developer_result, reviewer_result, user_task, task_temp_dir)
+        save_agent_outputs(planner_result, developer_result, reviewer_result, final_task, task_temp_dir)
 
         # Берем финальный результат (от ревьюера)
         final_result = reviewer_result
 
         # Проверяем результат
         result_text = str(final_result)
-        issues = validate_result(result_text, user_task)
+        issues = validate_result(result_text, final_task)
 
         with open(report_file, 'a', encoding='utf-8') as f:
             f.write("## ✅ Итоговая проверка\n\n")
@@ -491,8 +534,11 @@ def run_crew(user_task: str):
 
             log_step(f"👁️ Превью доступно: {preview_file}")
 
+        # Генерируем имя проекта
+        project_base_name = generate_project_name(user_task, requirements)
+        project_name = f"{project_base_name}_{task_timestamp}"
+
         # Копируем в общую папку projects
-        project_name = f"project_{task_timestamp}"
         project_dir = PROJECTS_PATH / project_name
         project_dir.mkdir(parents=True, exist_ok=True)
 
