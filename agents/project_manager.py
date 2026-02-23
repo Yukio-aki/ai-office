@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import List, Dict, Any
 import re
 import sys
+from core.llm_extractor import LLMExtractor
 
 # Добавляем путь к корню проекта
 ROOT = Path(__file__).resolve().parent.parent
@@ -51,6 +52,7 @@ class ProjectManager:
         # Папка для сохранения диалогов
         self.dialog_dir = Path(__file__).parent.parent / "dialog_history"
         self.dialog_dir.mkdir(exist_ok=True)
+        self.llm_extractor = LLMExtractor()
 
     def start_dialog(self, initial_task: str):
         """Начинает диалог с пользователем"""
@@ -138,131 +140,37 @@ class ProjectManager:
             }
 
     def _analyze_response_deep(self, response: str):
-        """Глубокий анализ ответа пользователя"""
-        response_lower = response.lower()
+        """Глубокий анализ ответа пользователя с помощью LLM"""
 
-        # 1. Определяем тип проекта
-        type_keywords = {
-            'сайт': 'website',
-            'страниц': 'website',
-            'html': 'website',
-            'парс': 'parser',
-            'бот': 'bot',
-            'скрипт': 'script',
-            'утилит': 'utility',
-            'игр': 'game',
-            'анимац': 'animation'
-        }
+        # Используем LLM для извлечения требований
+        extracted = self.llm_extractor.extract(response, self.requirements)
 
-        for keyword, proj_type in type_keywords.items():
-            if keyword in response_lower:
-                self.requirements['project_type'] = proj_type
-                break
+        # Обновляем requirements извлеченными данными
+        if extracted.get('project_type'):
+            self.requirements['project_type'] = extracted['project_type']
 
-        # 2. Определяем технологии
-        tech_keywords = {
-            'react': 'React',
-            'vue': 'Vue',
-            'angular': 'Angular',
-            'bootstrap': 'Bootstrap',
-            'tailwind': 'Tailwind',
-            'python': 'Python',
-            'javascript': 'JavaScript',
-            'js': 'JavaScript',
-            'jquery': 'jQuery',
-            'canvas': 'Canvas',
-            'gsap': 'GSAP',
-            'three': 'Three.js',
-            'webgl': 'WebGL'
-        }
+        if extracted.get('technologies'):
+            self.requirements['technologies'].extend(extracted['technologies'])
 
-        for keyword, tech in tech_keywords.items():
-            if keyword in response_lower and tech not in self.requirements['technologies']:
-                self.requirements['technologies'].append(tech)
+        if extracted.get('forbidden'):
+            self.requirements['forbidden'].extend(extracted['forbidden'])
 
-        # 3. Определяем цвета
-        color_patterns = {
-            'черн': 'черный',
-            'бел': 'белый',
-            'сер': 'серый',
-            'темн': 'темный',
-            'светл': 'светлый',
-            'фиолет': 'фиолетовый',
-            'син': 'синий',
-            'голуб': 'голубой',
-            'красн': 'красный',
-            'зелен': 'зеленый',
-            'желт': 'желтый'
-        }
+        if extracted.get('colors'):
+            self.requirements['colors'].extend(extracted['colors'])
 
-        for pattern, color in color_patterns.items():
-            if pattern in response_lower and color not in self.requirements['colors']:
-                self.requirements['colors'].append(color)
+        if extracted.get('style'):
+            self.requirements['style'] = extracted['style']
 
-        # 4. Определяем скорость анимации
-        if 'медлен' in response_lower:
-            self.requirements['animation_speed'] = 'slow'
-        elif 'средн' in response_lower:
-            self.requirements['animation_speed'] = 'medium'
-        elif 'быстр' in response_lower:
-            self.requirements['animation_speed'] = 'fast'
+        if extracted.get('animation_speed'):
+            self.requirements['animation_speed'] = extracted['animation_speed']
 
-        # 5. Определяем стиль
-        style_keywords = {
-            'абстракт': 'abstract',
-            'геометрич': 'geometric',
-            'органическ': 'organic',
-            'минимал': 'minimal',
-            'футурист': 'futuristic',
-            'дарк': 'dark',
-            'фэнтези': 'fantasy',
-            'киберпанк': 'cyberpunk'
-        }
+        if extracted.get('features'):
+            self.requirements['features'].extend(extracted['features'])
 
-        for keyword, style in style_keywords.items():
-            if keyword in response_lower:
-                self.requirements['style'] = style
+        if extracted.get('mood'):
+            self.requirements['mood'] = extracted['mood']
 
-        # 6. Определяем настроение
-        if 'темн' in response_lower or 'дарк' in response_lower:
-            self.requirements['mood'] = 'dark'
-        elif 'светл' in response_lower:
-            self.requirements['mood'] = 'light'
-
-        # 7. Определяем эффекты
-        effect_keywords = [
-            'переход', 'негатив', 'черно-бел', 'grayscale',
-            'наведен', 'клик', 'пар', 'частиц', 'свечен'
-        ]
-
-        for effect in effect_keywords:
-            if effect in response_lower:
-                effect_name = effect.replace('черно-бел', 'черно-белый')
-                if effect_name not in self.requirements['features']:
-                    self.requirements['features'].append(effect_name)
-
-        # 8. Определяем запреты
-        for word in self.categories['forbidden']:
-            if word in response_lower:
-                # Пытаемся понять что именно запрещено
-                words = response_lower.split()
-                for i, w in enumerate(words):
-                    if word in w and i + 1 < len(words):
-                        forbidden_item = words[i + 1]
-                        if forbidden_item not in self.requirements['forbidden']:
-                            self.requirements['forbidden'].append(forbidden_item)
-
-        # 9. Извлекаем ссылки
-        urls = re.findall(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+])+', response)
-        if urls:
-            self.requirements['examples'].extend(urls)
-
-        # 10. Анализируем длину ответа (для определения детализации)
-        word_count = len(response.split())
-        if word_count > 20:
-            self.requirements['detailed_response'] = True
-
-        # 11. Удаляем дубликаты
+        # Удаляем дубликаты
         self.requirements['technologies'] = list(set(self.requirements['technologies']))
         self.requirements['colors'] = list(set(self.requirements['colors']))
         self.requirements['features'] = list(set(self.requirements['features']))
