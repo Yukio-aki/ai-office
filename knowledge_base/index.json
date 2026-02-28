@@ -1,0 +1,43 @@
+{
+  "version": "1.0",
+  "examples": [
+    {
+      "id": "cyberpunk_full_001",
+      "name": "Cyberpunk Full Landing Page",
+      "path": "cyberpunk_examples/index.html",
+      "tech": "html",
+      "complexity": "medium",
+      "keywords": ["cyberpunk", "neon", "glitch", "futuristic", "grid", "particles"],
+      "colors": ["#00ffff", "#ff00ff", "#0a0a0a", "#ff0044"],
+      "description": "Полноценный киберпанк лендинг с неоновыми эффектами и анимацией"
+    },
+    {
+      "id": "cyberpunk_basic_001",
+      "name": "Cyberpunk Basic Landing",
+      "path": "project_1_cyberpunk/basic/index.html",
+      "tech": "html",
+      "complexity": "medium",
+      "keywords": ["cyberpunk", "neon", "glitch", "futuristic"],
+      "colors": ["#00ffff", "#ff00ff", "#0a0a0a"],
+      "description": "Базовый киберпанк лендинг с неоновыми эффектами"
+    },
+    {
+      "id": "canvas_grow_001",
+      "name": "Canvas Growing Line",
+      "path": "canvas/02_growing_line.html",
+      "tech": "canvas",
+      "complexity": "medium",
+      "keywords": ["grow", "line", "animation"],
+      "description": "Canvas анимация растущей линии"
+    },
+    {
+      "id": "html_basic_001",
+      "name": "Basic HTML Page",
+      "path": "html/01_basic.html",
+      "tech": "html",
+      "complexity": "simple",
+      "keywords": ["basic", "black", "white"],
+      "description": "Базовая HTML страница"
+    }
+  ]
+}

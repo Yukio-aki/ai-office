@@ -1,0 +1,11 @@
+CANVAS RULES:
+1. Для сложных анимаций используй requestAnimationFrame
+2. Всегда очищай canvas перед каждым кадром: ctx.clearRect()
+3. Задавай canvas ширину и высоту через атрибуты или JS
+4. Пример анимации роста:
+   let size = 0;
+   function animate() {
+       size += 1;
+       ctx.fillRect(x, y, size, size);
+       requestAnimationFrame(animate);
+   }

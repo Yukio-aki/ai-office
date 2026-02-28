@@ -1,0 +1,29 @@
+ {
+  "id": "cyberpunk_landing_001",
+  "name": "Киберпанк-лендинг",
+  "complexity": "medium",
+  "tech": ["html", "css", "javascript"],
+  "structure": "multi-file",
+
+  "prompts": {
+    "basic": "Создай футуристический лендинг в стиле киберпанк. Используй неоновые цвета (синий/розовый/фиолетовый), добавь glitch-эффект на заголовок, анимированный фон с частицами, адаптивную верстку.",
+
+    "detailed": "Разработай одностраничный сайт для киберпанк-тусовки. Требования: черный фон (#0a0a0a), неоновые акценты (#00ffff, #ff00ff), glitch-анимация текста, анимированный фон с частицами (particles.js), адаптивная сетка для карточек, ховер-эффекты с неоновым свечением.",
+
+    "minimal": "Сайт в стиле киберпанк с неоновой анимацией и glitch-эффектом."
+  },
+
+  "files": [
+    {"path": "index.html", "description": "Основная структура"},
+    {"path": "css/style.css", "description": "Неоновые стили и анимации"},
+    {"path": "js/script.js", "description": "Интерактивность и частицы"}
+  ],
+
+  "keywords": ["cyberpunk", "neon", "glitch", "particles", "futuristic"],
+
+  "assets": {
+    "fonts": ["Orbitron", "Rajdhani", "Fira Code"],
+    "colors": ["#00ffff", "#ff00ff", "#ff44cc", "#0a0a0a", "#ff0044"],
+    "images": ["poster.jpeg"]
+  }
+}

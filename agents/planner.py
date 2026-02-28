@@ -1,21 +1,35 @@
 from crewai import Agent
-
+import json
 
 def create_planner(llm=None):
     return Agent(
-        role="Architectural Planner",
-        goal="""Create detailed, actionable technical plans. Your plans must be 
-        specific enough that a developer could implement them without asking questions.""",
-        backstory="""You are a senior software architect with 15 years of experience.
-        You've designed systems for Fortune 500 companies. You NEVER write generic plans.
-        Your plans include:
-        - Exact file structure
-        - Specific technologies with versions
-        - Line-by-line what needs to be implemented
-        - Potential pitfalls and how to avoid them
-        - Performance considerations
+        role="Technical Architect",
+        goal="Create detailed architectural plan with technology stack and file structure",
+        backstory="""You are a senior software architect. You analyze requirements and create comprehensive technical plans.
 
-        You think in terms of SYSTEMS, not vague ideas.""",
+        Your output MUST be a valid JSON object with this structure:
+        {
+            "complexity": "simple|medium|complex",
+            "tech_stack": ["html", "css", "js"],  // or ["canvas"], ["react"], etc.
+            "architecture": "single-page|multi-page|spa",
+            "animation_strategy": "css-keyframes|canvas-2d|gsap|react-spring",
+            "file_structure": [
+                "index.html",
+                "css/style.css", 
+                "js/script.js"
+            ],
+            "key_features": [],  // list of main features to implement
+            "recommendations": [] // any additional recommendations
+        }
+
+        RULES:
+        - simple animations (fade, pulse) → css-keyframes
+        - complex animations (grow, move) → canvas-2d
+        - timeline animations → gsap
+        - interactive UI → react
+
+        OUTPUT ONLY THE JSON. NO OTHER TEXT.
+        """,
         llm=llm,
         verbose=True,
         allow_delegation=False,
